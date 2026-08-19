@@ -1,0 +1,96 @@
+name: Build OBS Streamlink installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  OBS_VERSION: 32.2.1
+  OBS_REF: 32.2.1
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout OBS Studio 32.2.1
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: 32.2.1
+          path: obs-studio
+          submodules: recursive
+
+      - name: Install build tools
+        shell: pwsh
+        run: |
+          choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y --no-progress
+          choco install 7zip -y --no-progress
+
+      - name: Build OBS Studio dependencies
+        shell: pwsh
+        working-directory: obs-studio
+        run: |
+          ./CI/build-windows.ps1 -Choco -BuildConfiguration RelWithDebInfo -Package
+
+      - name: Configure plugin
+        shell: pwsh
+        run: |
+          $obs = "${{ github.workspace }}\obs-studio\build_x64\install"
+          $ffmpeg = "${{ github.workspace }}\obs-studio\build_x64\rundir\RelWithDebInfo"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DobsPath="$obs" `
+            -DFFMPEG_PATH="$ffmpeg" `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build plugin
+        shell: pwsh
+        run: cmake --build build --config Release --parallel
+
+      - name: Package plugin installer payload
+        shell: pwsh
+        run: |
+          $stage = "${{ github.workspace }}\package"
+          New-Item -ItemType Directory -Force -Path "$stage\obs-plugins\64bit" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$stage\data\obs-plugins\obs-streamlink" | Out-Null
+
+          Copy-Item "build\Release\obs-streamlink.dll" "$stage\obs-plugins\64bit\"
+          if (Test-Path data) {
+            Copy-Item "data\*" "$stage\data\obs-plugins\obs-streamlink\" -Recurse -Force
+          }
+
+          @'
+OBS Streamlink for OBS Studio 32.2.1
+
+Installation:
+1. Close OBS Studio.
+2. Copy the obs-plugins and data folders into your OBS Studio installation directory.
+3. Start OBS Studio and add the Streamlink source.
+
+This package contains the obs-streamlink plugin only; OBS Studio itself is not redistributed.
+'@ | Set-Content "$stage\INSTALL.txt"
+
+          7z a -tzip "obs-streamlink-obs32.2.1-windows-x64.zip" "$stage\*"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-streamlink-obs32.2.1-windows-x64
+          path: obs-streamlink-obs32.2.1-windows-x64.zip
+
+      - name: Create GitHub release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: obs-streamlink-obs32.2.1-windows-x64.zip
+          generate_release_notes: true
