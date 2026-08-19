@@ -23,7 +23,7 @@ bool obs_module_load(void)
 	obs_streamlink_data_path = data_path;
 	if (!std::filesystem::exists(obs_streamlink_data_path / obs_streamlink_python_ver))
 	{
-		blog(LOG_ERROR, "[Streamlink Source] Failed to initialize streamlink source!! Python38 not found in plugin data path.");
+		blog(LOG_ERROR, "[Streamlink Source] Failed to initialize streamlink source!! %s not found in plugin data path.", obs_streamlink_python_ver);
 		return false;
 	}
 
