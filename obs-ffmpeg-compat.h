@@ -26,7 +26,12 @@
 #define av_free_packet av_packet_unref
 #endif
 
-#if LIBAVCODEC_VERSION_MAJOR >= 58
+#if LIBAVCODEC_VERSION_MAJOR >= 60
+/* FFmpeg 6+ removed the deprecated truncated-packet flags. */
+#define CODEC_CAP_TRUNC 0
+#define CODEC_FLAG_TRUNC 0
+#define CODEC_FLAG_GLOBAL_H AV_CODEC_FLAG_GLOBAL_HEADER
+#elif LIBAVCODEC_VERSION_MAJOR >= 58
 #define CODEC_CAP_TRUNC AV_CODEC_CAP_TRUNCATED
 #define CODEC_FLAG_TRUNC AV_CODEC_FLAG_TRUNCATED
 #define CODEC_FLAG_GLOBAL_H AV_CODEC_FLAG_GLOBAL_HEADER
