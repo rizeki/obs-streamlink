@@ -45,13 +45,16 @@ target_link_options(obs-streamlink PUBLIC
         "/NODEFAULTLIB:swscale.lib"
 
         "/DELAYLOAD:python38.dll"
-        "/DELAYLOAD:avcodec-59.dll"
-        "/DELAYLOAD:avdevice-59.dll"
-        "/DELAYLOAD:avfilter-8.dll"
-        "/DELAYLOAD:avformat-59.dll"
-        "/DELAYLOAD:avutil-57.dll"
-        "/DELAYLOAD:swresample-4.dll"
-        "/DELAYLOAD:swscale-6.dll"  
+        # OBS 32.2.1 uses newer FFmpeg major DLL versions than the original
+        # OBS 28 build.  FindFFmpeg.cmake exposes these version numbers from
+        # the headers used for the build, so don't hard-code old DLL names.
+        "/DELAYLOAD:avcodec-${FFMPEG_AVCODEC_VERSION_MAJOR}.dll"
+        "/DELAYLOAD:avdevice-${FFMPEG_AVDEVICE_VERSION_MAJOR}.dll"
+        "/DELAYLOAD:avfilter-${FFMPEG_AVFILTER_VERSION_MAJOR}.dll"
+        "/DELAYLOAD:avformat-${FFMPEG_AVFORMAT_VERSION_MAJOR}.dll"
+        "/DELAYLOAD:avutil-${FFMPEG_AVUTIL_VERSION_MAJOR}.dll"
+        "/DELAYLOAD:swresample-${FFMPEG_SWRESAMPLE_VERSION_MAJOR}.dll"
+        "/DELAYLOAD:swscale-${FFMPEG_SWSCALE_VERSION_MAJOR}.dll"
 )
 
 target_link_libraries(obs-streamlink PRIVATE
