@@ -69,16 +69,7 @@ jobs:
             Copy-Item "data\*" "$stage\data\obs-plugins\obs-streamlink\" -Recurse -Force
           }
 
-          @'
-OBS Streamlink for OBS Studio 32.2.1
-
-Installation:
-1. Close OBS Studio.
-2. Copy the obs-plugins and data folders into your OBS Studio installation directory.
-3. Start OBS Studio and add the Streamlink source.
-
-This package contains the obs-streamlink plugin only; OBS Studio itself is not redistributed.
-'@ | Set-Content "$stage\INSTALL.txt"
+          @''@ | Set-Content "$stage\INSTALL.txt"
 
           7z a -tzip "obs-streamlink-obs32.2.1-windows-x64.zip" "$stage\*"
 
