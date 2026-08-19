@@ -41,11 +41,23 @@ jobs:
         shell: pwsh
         run: |
           $obs = "${{ github.workspace }}\obs-studio\build_x64\install"
-          $ffmpeg = "${{ github.workspace }}\obs-studio\build_x64\rundir\RelWithDebInfo"
+
+          # OBS's Windows build downloads its prebuilt dependencies here.
+          $deps = "${{ github.workspace }}\obs-studio\.deps"
+
+          if (-not (Test-Path $deps)) {
+            Write-Error "OBS dependency directory not found: $deps"
+            Write-Host "Contents of obs-studio:"
+            Get-ChildItem "${{ github.workspace }}\obs-studio" -Force
+            exit 1
+          }
+
+          Write-Host "OBS install: $obs"
+          Write-Host "OBS dependencies: $deps"
+
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
             -DobsPath="$obs" `
-            -DFFMPEG_PATH="$ffmpeg" `
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_PREFIX_PATH="$deps" `
 
       - name: Build plugin
         shell: pwsh
