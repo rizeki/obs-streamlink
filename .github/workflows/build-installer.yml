@@ -191,6 +191,25 @@ jobs:
             --parallel `
             --target libobs obs-frontend-api
 
+      - name: Verify OBS headers
+        shell: pwsh
+        run: |
+          $obs = "${{ github.workspace }}\obs-studio"
+
+          $required = @(
+            "$obs\libobs\obs-module.h",
+            "$obs\libobs\obs.h",
+            "$obs\libobs\util\circlebuf.h"
+          )
+
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) {
+              throw "Missing OBS header: $file"
+            }
+
+            Write-Host "Found: $file"
+          }
+
 
       # ============================================================
       # Locate OBS libraries
@@ -248,7 +267,11 @@ jobs:
         shell: pwsh
         run: |
           $deps = "${{ github.workspace }}\obs-deps"
-          $obs = "${{ github.workspace }}\obs-studio\build_x64"
+          $obsSource = "${{ github.workspace }}\obs-studio"
+          $obsBuild = "$obsSource\build_x64"
+
+          $libobsInclude = "$obsSource\libobs"
+          $frontendInclude = "$obsSource\frontend\api"
 
           Write-Host "========================================"
           Write-Host "Python"
@@ -261,9 +284,12 @@ jobs:
           Write-Host "========================================"
           Write-Host "OBS"
           Write-Host "========================================"
-          Write-Host "Build: $obs"
-          Write-Host "Library: $env:OBS_LIB_DIR"
-          Write-Host "Frontend: $env:OBS_FRONTEND_LIB_DIR"
+          Write-Host "Source:          $obsSource"
+          Write-Host "Build:           $obsBuild"
+          Write-Host "libobs include:  $libobsInclude"
+          Write-Host "Frontend include: $frontendInclude"
+          Write-Host "libobs library:  $env:OBS_LIB_DIR"
+          Write-Host "Frontend library: $env:OBS_FRONTEND_LIB_DIR"
 
           Write-Host ""
           Write-Host "========================================"
@@ -271,14 +297,30 @@ jobs:
           Write-Host "========================================"
           Write-Host "Path: $deps"
 
+          if (-not (Test-Path "$libobsInclude\obs-module.h")) {
+            throw "Could not find obs-module.h in $libobsInclude"
+          }
+
+          if (-not (Test-Path "$libobsInclude\obs.h")) {
+            throw "Could not find obs.h in $libobsInclude"
+          }
+
+          if (-not (Test-Path "$libobsInclude\util\circlebuf.h")) {
+            throw "Could not find util/circlebuf.h"
+          }
+
           cmake `
             -S . `
             -B build `
             -G "Visual Studio 17 2022" `
             -A x64 `
-            -DobsPath="$obs" `
+            -DobsPath="$obsBuild" `
             -DFFMPEG_PATH="$deps" `
             -DCMAKE_PREFIX_PATH="$deps" `
+            -DLIBOBS_INCLUDE_DIR="$libobsInclude" `
+            -DOBS_FRONTEND_INCLUDE_DIR="$frontendInclude" `
+            -DLIBOBS_LIB="$env:OBS_LIB_DIR\obs.lib" `
+            -DOBS_FRONTEND_LIB="$env:OBS_FRONTEND_LIB_DIR\obs-frontend-api.lib" `
             -DPython3_ROOT_DIR="$env:PYTHON_ROOT" `
             -DPython3_EXECUTABLE="$env:PYTHON_ROOT\python.exe" `
             -DPython3_INCLUDE_DIR="$env:PYTHON_INCLUDE" `
