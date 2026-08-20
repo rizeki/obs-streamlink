@@ -68,8 +68,3 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
 else()
     target_link_libraries(obs-streamlink PRIVATE "${Python3Gen}")
 endif()
-
-add_custom_command(TARGET obs-streamlink POST_BUILD
-        # Copy to obs-studio dev environment for immediate testing
-        COMMAND powershell -Command "if ($<CONFIG:Debug> -eq 1 ) { robocopy ${PROJECT_SOURCE_DIR}/out/build/x64-Debug ${OBS_RUNDIR}/obs-plugins/64bit ${OBS_ARCH_NAME}; robocopy ${PROJECT_SOURCE_DIR}/data ${OBS_RUNDIR}/data/obs-plugins/obs-streamlink /E;}"
-)
