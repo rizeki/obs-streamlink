@@ -15,128 +15,226 @@ env:
 
 jobs:
   build:
+    name: Build Windows x64
     runs-on: windows-2022
 
     steps:
-      # ------------------------------------------------------------
-      # Checkout plugin
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # Checkout obs-streamlink
+      # ============================================================
+
       - name: Checkout obs-streamlink
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           submodules: recursive
 
-      # ------------------------------------------------------------
-      # Checkout exact OBS version
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # Checkout OBS Studio 32.2.1
+      # ============================================================
+
       - name: Checkout OBS Studio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: obsproject/obs-studio
           ref: 32.2.1
           path: obs-studio
           submodules: recursive
 
-      # ------------------------------------------------------------
+
+      # ============================================================
       # Install build tools
-      # ------------------------------------------------------------
-      - name: Install tools
+      # ============================================================
+
+      - name: Install build tools
         shell: pwsh
         run: |
           choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' -y --no-progress
           choco install 7zip -y --no-progress
 
-      # ------------------------------------------------------------
-      # Download the exact OBS 32.2.1 dependency bundle
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # Download OBS dependency package
+      # ============================================================
+
       - name: Download OBS dependencies
         shell: pwsh
         run: |
           $url = "https://github.com/obsproject/obs-deps/releases/download/${{ env.OBS_DEPS_VERSION }}/windows-deps-${{ env.OBS_DEPS_VERSION }}-x64.zip"
 
-          $zip = "${{ github.workspace }}\obs-deps.zip"
+          $zip  = "${{ github.workspace }}\obs-deps.zip"
           $deps = "${{ github.workspace }}\obs-deps"
 
-          Write-Host "Downloading:"
+          Write-Host "Downloading OBS dependencies:"
           Write-Host $url
 
           Invoke-WebRequest `
             -Uri $url `
             -OutFile $zip
 
-          New-Item -ItemType Directory -Force -Path $deps | Out-Null
+          if (-not (Test-Path $zip)) {
+            throw "Failed to download OBS dependency archive."
+          }
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $deps | Out-Null
 
           7z x $zip "-o$deps" -y
 
-          Write-Host "Dependency contents:"
-          Get-ChildItem $deps -Force
+          Write-Host ""
+          Write-Host "OBS dependency tree:"
+          Get-ChildItem $deps -Recurse -Force |
+            Select-Object -First 200
 
-      # ------------------------------------------------------------
-      # Build OBS libraries
+
+      # ============================================================
+      # Configure OBS
       #
-      # We don't need the entire OBS application. We need libobs and
-      # obs-frontend-api so our plugin can link against OBS 32.2.1.
-      # ------------------------------------------------------------
+      # We only need libobs and obs-frontend-api.
+      # Do NOT install the OBS tree afterwards.
+      # ============================================================
+
       - name: Configure OBS
         shell: pwsh
         run: |
-          $obs = "${{ github.workspace }}\obs-studio"
+          $obs  = "${{ github.workspace }}\obs-studio"
           $deps = "${{ github.workspace }}\obs-deps"
+          $build = "$obs\build_x64"
+
+          Write-Host "OBS source: $obs"
+          Write-Host "OBS deps:   $deps"
+          Write-Host "OBS build:  $build"
 
           cmake `
             -S "$obs" `
-            -B "$obs\build_x64" `
+            -B "$build" `
             -G "Visual Studio 17 2022" `
             -A x64 `
             -DCMAKE_PREFIX_PATH="$deps" `
-            -DCMAKE_INSTALL_PREFIX="$obs\build_x64\install" `
             -DENABLE_UI=OFF `
             -DENABLE_BROWSER=OFF `
             -DENABLE_PLUGINS=OFF `
             -DENABLE_SCRIPTING=OFF `
             -DENABLE_WEBSOCKET=OFF `
-            -DENABLE_NEW_MPEGTS_OUTPUT=OFF `
-            -DENABLE_VIRTUALCAM=OFF
+            -DENABLE_VIRTUALCAM=OFF `
+            -DENABLE_NEW_MPEGTS_OUTPUT=OFF
+
+
+      # ============================================================
+      # Build OBS libraries
+      # ============================================================
 
       - name: Build OBS libraries
         shell: pwsh
         run: |
+          $build = "${{ github.workspace }}\obs-studio\build_x64"
+
           cmake `
-            --build "${{ github.workspace }}\obs-studio\build_x64" `
+            --build "$build" `
             --config Release `
             --parallel `
             --target libobs obs-frontend-api
 
-      - name: Install OBS libraries
+
+      # ============================================================
+      # Locate OBS development files
+      # ============================================================
+
+      - name: Locate OBS libraries
         shell: pwsh
         run: |
-          cmake `
-            --install "${{ github.workspace }}\obs-studio\build_x64" `
-            --prefix "${{ github.workspace }}\obs-studio\build_x64\install" `
-            --config Release
+          $build = "${{ github.workspace }}\obs-studio\build_x64"
 
-      # ------------------------------------------------------------
+          Write-Host ""
+          Write-Host "Searching for obs.lib..."
+
+          $obsLib = Get-ChildItem `
+            "$build" `
+            -Recurse `
+            -Filter "obs.lib" `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -match "\\Release\\"
+            } |
+            Select-Object -First 1
+
+          if (-not $obsLib) {
+            throw "obs.lib was not found."
+          }
+
+          Write-Host "obs.lib:"
+          Write-Host $obsLib.FullName
+
+          Write-Host ""
+          Write-Host "Searching for obs-frontend-api.lib..."
+
+          $frontendLib = Get-ChildItem `
+            "$build" `
+            -Recurse `
+            -Filter "obs-frontend-api.lib" `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -match "\\Release\\"
+            } |
+            Select-Object -First 1
+
+          if (-not $frontendLib) {
+            throw "obs-frontend-api.lib was not found."
+          }
+
+          Write-Host "obs-frontend-api.lib:"
+          Write-Host $frontendLib.FullName
+
+          # Save paths for later steps.
+          "OBS_LIB=$($obsLib.Directory.FullName)" >> $env:GITHUB_ENV
+          "OBS_FRONTEND_LIB=$($frontendLib.Directory.FullName)" >> $env:GITHUB_ENV
+
+          Write-Host ""
+          Write-Host "OBS_LIB=$($obsLib.Directory.FullName)"
+          Write-Host "OBS_FRONTEND_LIB=$($frontendLib.Directory.FullName)"
+
+
+      # ============================================================
       # Build obs-streamlink
-      # ------------------------------------------------------------
+      #
+      # Your FindFFmpeg.cmake already extracts the FFmpeg major
+      # versions from version.h, so no FFmpeg version hardcoding is
+      # required here.
+      # ============================================================
+
       - name: Configure obs-streamlink
         shell: pwsh
         run: |
-          $obs = "${{ github.workspace }}\obs-studio\build_x64\install"
           $deps = "${{ github.workspace }}\obs-deps"
+          $obs  = "${{ github.workspace }}\obs-studio"
 
-          Write-Host "OBS install:"
-          Get-ChildItem $obs -Recurse -ErrorAction SilentlyContinue
+          Write-Host "FFmpeg path:"
+          Write-Host $deps
 
-          Write-Host "Configuring plugin..."
+          Write-Host ""
+          Write-Host "OBS library directory:"
+          Write-Host $env:OBS_LIB
+
+          Write-Host ""
+          Write-Host "OBS frontend library directory:"
+          Write-Host $env:OBS_FRONTEND_LIB
 
           cmake `
             -S . `
             -B build `
             -G "Visual Studio 17 2022" `
             -A x64 `
-            -DobsPath="$obs" `
+            -DobsPath="$obs\build_x64" `
             -DFFMPEG_PATH="$deps" `
             -DCMAKE_PREFIX_PATH="$deps"
+
+
+      # ============================================================
+      # Build plugin
+      # ============================================================
 
       - name: Build obs-streamlink
         shell: pwsh
@@ -146,47 +244,84 @@ jobs:
             --config Release `
             --parallel
 
-      # ------------------------------------------------------------
-      # Verify output
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # Find resulting DLL
+      # ============================================================
+
       - name: Verify plugin
         shell: pwsh
         run: |
-          $dll = "${{ github.workspace }}\build\Release\obs-streamlink.dll"
+          Write-Host "Searching for obs-streamlink.dll..."
 
-          if (-not (Test-Path $dll)) {
-            Write-Error "obs-streamlink.dll was not produced."
+          $dll = Get-ChildItem `
+            "${{ github.workspace }}\build" `
+            -Recurse `
+            -Filter "obs-streamlink.dll" `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -match "\\Release\\"
+            } |
+            Select-Object -First 1
+
+          if (-not $dll) {
+            Write-Host ""
             Write-Host "Build directory:"
-            Get-ChildItem "${{ github.workspace }}\build" -Recurse
-            exit 1
+            Get-ChildItem `
+              "${{ github.workspace }}\build" `
+              -Recurse `
+              -Force
+
+            throw "obs-streamlink.dll was not produced."
           }
 
-          Write-Host "Successfully built:"
-          Get-Item $dll
+          Write-Host ""
+          Write-Host "SUCCESS"
+          Write-Host "Plugin:"
+          Write-Host $dll.FullName
 
-      # ------------------------------------------------------------
-      # Package ONLY what needs replacing
-      # ------------------------------------------------------------
+          "PLUGIN_DLL=$($dll.FullName)" >> $env:GITHUB_ENV
+
+
+      # ============================================================
+      # Package
+      #
+      # The ZIP mirrors the OBS installation directory.
+      # ============================================================
+
       - name: Package plugin
         shell: pwsh
         run: |
           $stage = "${{ github.workspace }}\package"
 
+          Remove-Item `
+            $stage `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
           New-Item `
             -ItemType Directory `
             -Force `
-            -Path "$stage\obs-plugins\64bit" | Out-Null
+            -Path "$stage\obs-plugins\64bit" |
+            Out-Null
 
           Copy-Item `
-            "${{ github.workspace }}\build\Release\obs-streamlink.dll" `
-            "$stage\obs-plugins\64bit\obs-streamlink.dll"
+            "$env:PLUGIN_DLL" `
+            "$stage\obs-plugins\64bit\obs-streamlink.dll" `
+            -Force
 
-          # Include plugin data if the source tree has it.
+          # ----------------------------------------------------------
+          # Copy plugin data
+          # ----------------------------------------------------------
+
           if (Test-Path "${{ github.workspace }}\data") {
+
             New-Item `
               -ItemType Directory `
               -Force `
-              -Path "$stage\data\obs-plugins\obs-streamlink" | Out-Null
+              -Path "$stage\data\obs-plugins\obs-streamlink" |
+              Out-Null
 
             Copy-Item `
               "${{ github.workspace }}\data\*" `
@@ -195,43 +330,77 @@ jobs:
               -Force
           }
 
+          # ----------------------------------------------------------
+          # Installation instructions
+          # ----------------------------------------------------------
+
           @"
           OBS Streamlink
-          OBS version: 32.2.1
-          Architecture: Windows x64
+          ==============
 
-          Copy the contents of this archive into your OBS Studio
-          installation directory.
+          Built for:
+            OBS Studio 32.2.1
+            Windows x64
+
+          Installation:
+            1. Completely close OBS Studio.
+            2. Extract this ZIP into your OBS Studio installation
+               directory.
+            3. Allow Windows to replace existing files if prompted.
+            4. Start OBS Studio.
 
           The main plugin file is:
 
-          obs-plugins\64bit\obs-streamlink.dll
+            obs-plugins\64bit\obs-streamlink.dll
 
-          Close OBS completely before replacing the DLL.
           "@ | Set-Content "$stage\INSTALL.txt"
 
-          if (Test-Path "obs-streamlink-obs32.2.1-windows-x64.zip") {
-            Remove-Item "obs-streamlink-obs32.2.1-windows-x64.zip" -Force
-          }
+          # ----------------------------------------------------------
+          # Create ZIP
+          # ----------------------------------------------------------
+
+          $zip = "${{ github.workspace }}\obs-streamlink-obs32.2.1-windows-x64.zip"
+
+          Remove-Item `
+            $zip `
+            -Force `
+            -ErrorAction SilentlyContinue
 
           7z a `
             -tzip `
-            "obs-streamlink-obs32.2.1-windows-x64.zip" `
+            "$zip" `
             "$stage\*"
 
-      # ------------------------------------------------------------
+          if (-not (Test-Path $zip)) {
+            throw "Failed to create package."
+          }
+
+          Write-Host ""
+          Write-Host "PACKAGE CREATED:"
+          Write-Host $zip
+
+          Write-Host ""
+          Write-Host "Package contents:"
+          7z l "$zip"
+
+
+      # ============================================================
       # Upload artifact
-      # ------------------------------------------------------------
-      - name: Upload plugin ZIP
+      # ============================================================
+
+      - name: Upload plugin package
         uses: actions/upload-artifact@v4
         with:
           name: obs-streamlink-obs32.2.1-windows-x64
           path: obs-streamlink-obs32.2.1-windows-x64.zip
           if-no-files-found: error
+          retention-days: 30
 
-      # ------------------------------------------------------------
-      # Optional GitHub release
-      # ------------------------------------------------------------
+
+      # ============================================================
+      # GitHub Release
+      # ============================================================
+
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
