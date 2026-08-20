@@ -12,6 +12,7 @@ permissions:
 env:
   OBS_VERSION: 32.2.1
   OBS_DEPS_VERSION: 2026-07-15
+  PYTHON_VERSION: '3.8.10'
 
 jobs:
   build:
@@ -31,7 +32,7 @@ jobs:
 
 
       # ============================================================
-      # Checkout OBS Studio 32.2.1
+      # Checkout exact OBS version
       # ============================================================
 
       - name: Checkout OBS Studio
@@ -44,7 +45,67 @@ jobs:
 
 
       # ============================================================
-      # Install build tools
+      # Python 3.8
+      #
+      # obs-streamlink explicitly requires Python 3.8 and links
+      # against python38.lib.
+      # ============================================================
+
+      - name: Install Python 3.8
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.8.10'
+          architecture: x64
+          check-latest: true
+
+      - name: Verify Python 3.8
+        shell: pwsh
+        run: |
+          Write-Host "Python executable:"
+          python -c "import sys; print(sys.executable)"
+
+          Write-Host ""
+          Write-Host "Python version:"
+          python --version
+
+          $python = python -c "import sys; print(sys.executable)"
+          $prefix = python -c "import sys; print(sys.prefix)"
+
+          Write-Host ""
+          Write-Host "Python prefix:"
+          Write-Host $prefix
+
+          if (-not ($python -match '3\.8')) {
+            throw "Python 3.8 was not selected."
+          }
+
+          # Find Python headers and library.
+          $include = Join-Path $prefix "include"
+          $lib = Join-Path $prefix "libs\python38.lib"
+
+          Write-Host ""
+          Write-Host "Python include:"
+          Write-Host $include
+
+          Write-Host ""
+          Write-Host "Python library:"
+          Write-Host $lib
+
+          if (-not (Test-Path $include)) {
+            throw "Python include directory was not found: $include"
+          }
+
+          if (-not (Test-Path $lib)) {
+            throw "python38.lib was not found: $lib"
+          }
+
+          "PYTHON_ROOT=$prefix" >> $env:GITHUB_ENV
+          "PYTHON_INCLUDE=$include" >> $env:GITHUB_ENV
+          "PYTHON_LIBRARY=$lib" >> $env:GITHUB_ENV
+
+
+      # ============================================================
+      # Build tools
       # ============================================================
 
       - name: Install build tools
@@ -55,7 +116,7 @@ jobs:
 
 
       # ============================================================
-      # Download OBS dependency package
+      # Download exact OBS dependency package
       # ============================================================
 
       - name: Download OBS dependencies
@@ -63,10 +124,10 @@ jobs:
         run: |
           $url = "https://github.com/obsproject/obs-deps/releases/download/${{ env.OBS_DEPS_VERSION }}/windows-deps-${{ env.OBS_DEPS_VERSION }}-x64.zip"
 
-          $zip  = "${{ github.workspace }}\obs-deps.zip"
+          $zip = "${{ github.workspace }}\obs-deps.zip"
           $deps = "${{ github.workspace }}\obs-deps"
 
-          Write-Host "Downloading OBS dependencies:"
+          Write-Host "Downloading:"
           Write-Host $url
 
           Invoke-WebRequest `
@@ -74,7 +135,7 @@ jobs:
             -OutFile $zip
 
           if (-not (Test-Path $zip)) {
-            throw "Failed to download OBS dependency archive."
+            throw "Failed to download OBS dependencies."
           }
 
           New-Item `
@@ -85,28 +146,20 @@ jobs:
           7z x $zip "-o$deps" -y
 
           Write-Host ""
-          Write-Host "OBS dependency tree:"
-          Get-ChildItem $deps -Recurse -Force |
-            Select-Object -First 200
+          Write-Host "OBS dependency directory:"
+          Get-ChildItem $deps -Force
 
 
       # ============================================================
       # Configure OBS
-      #
-      # We only need libobs and obs-frontend-api.
-      # Do NOT install the OBS tree afterwards.
       # ============================================================
 
       - name: Configure OBS
         shell: pwsh
         run: |
-          $obs  = "${{ github.workspace }}\obs-studio"
+          $obs = "${{ github.workspace }}\obs-studio"
           $deps = "${{ github.workspace }}\obs-deps"
           $build = "$obs\build_x64"
-
-          Write-Host "OBS source: $obs"
-          Write-Host "OBS deps:   $deps"
-          Write-Host "OBS build:  $build"
 
           cmake `
             -S "$obs" `
@@ -140,16 +193,13 @@ jobs:
 
 
       # ============================================================
-      # Locate OBS development files
+      # Locate OBS libraries
       # ============================================================
 
       - name: Locate OBS libraries
         shell: pwsh
         run: |
           $build = "${{ github.workspace }}\obs-studio\build_x64"
-
-          Write-Host ""
-          Write-Host "Searching for obs.lib..."
 
           $obsLib = Get-ChildItem `
             "$build" `
@@ -162,14 +212,8 @@ jobs:
             Select-Object -First 1
 
           if (-not $obsLib) {
-            throw "obs.lib was not found."
+            throw "Could not find obs.lib"
           }
-
-          Write-Host "obs.lib:"
-          Write-Host $obsLib.FullName
-
-          Write-Host ""
-          Write-Host "Searching for obs-frontend-api.lib..."
 
           $frontendLib = Get-ChildItem `
             "$build" `
@@ -182,54 +226,65 @@ jobs:
             Select-Object -First 1
 
           if (-not $frontendLib) {
-            throw "obs-frontend-api.lib was not found."
+            throw "Could not find obs-frontend-api.lib"
           }
 
+          Write-Host "obs.lib:"
+          Write-Host $obsLib.FullName
+
+          Write-Host ""
           Write-Host "obs-frontend-api.lib:"
           Write-Host $frontendLib.FullName
 
-          # Save paths for later steps.
-          "OBS_LIB=$($obsLib.Directory.FullName)" >> $env:GITHUB_ENV
-          "OBS_FRONTEND_LIB=$($frontendLib.Directory.FullName)" >> $env:GITHUB_ENV
-
-          Write-Host ""
-          Write-Host "OBS_LIB=$($obsLib.Directory.FullName)"
-          Write-Host "OBS_FRONTEND_LIB=$($frontendLib.Directory.FullName)"
+          "OBS_LIB_DIR=$($obsLib.Directory.FullName)" >> $env:GITHUB_ENV
+          "OBS_FRONTEND_LIB_DIR=$($frontendLib.Directory.FullName)" >> $env:GITHUB_ENV
 
 
       # ============================================================
-      # Build obs-streamlink
-      #
-      # Your FindFFmpeg.cmake already extracts the FFmpeg major
-      # versions from version.h, so no FFmpeg version hardcoding is
-      # required here.
+      # Configure plugin
       # ============================================================
 
       - name: Configure obs-streamlink
         shell: pwsh
         run: |
           $deps = "${{ github.workspace }}\obs-deps"
-          $obs  = "${{ github.workspace }}\obs-studio"
+          $obs = "${{ github.workspace }}\obs-studio\build_x64"
 
-          Write-Host "FFmpeg path:"
-          Write-Host $deps
+          Write-Host "========================================"
+          Write-Host "Python"
+          Write-Host "========================================"
+          Write-Host "Root:    $env:PYTHON_ROOT"
+          Write-Host "Include: $env:PYTHON_INCLUDE"
+          Write-Host "Library: $env:PYTHON_LIBRARY"
 
           Write-Host ""
-          Write-Host "OBS library directory:"
-          Write-Host $env:OBS_LIB
+          Write-Host "========================================"
+          Write-Host "OBS"
+          Write-Host "========================================"
+          Write-Host "Build: $obs"
+          Write-Host "Library: $env:OBS_LIB_DIR"
+          Write-Host "Frontend: $env:OBS_FRONTEND_LIB_DIR"
 
           Write-Host ""
-          Write-Host "OBS frontend library directory:"
-          Write-Host $env:OBS_FRONTEND_LIB
+          Write-Host "========================================"
+          Write-Host "FFmpeg"
+          Write-Host "========================================"
+          Write-Host "Path: $deps"
 
           cmake `
             -S . `
             -B build `
             -G "Visual Studio 17 2022" `
             -A x64 `
-            -DobsPath="$obs\build_x64" `
+            -DobsPath="$obs" `
             -DFFMPEG_PATH="$deps" `
-            -DCMAKE_PREFIX_PATH="$deps"
+            -DCMAKE_PREFIX_PATH="$deps" `
+            -DPython3_ROOT_DIR="$env:PYTHON_ROOT" `
+            -DPython3_EXECUTABLE="$env:PYTHON_ROOT\python.exe" `
+            -DPython3_INCLUDE_DIR="$env:PYTHON_INCLUDE" `
+            -DPython3_LIBRARY="$env:PYTHON_LIBRARY" `
+            -DPython3_FIND_REGISTRY=NEVER `
+            -DPython3_FIND_STRATEGY=LOCATION
 
 
       # ============================================================
@@ -246,14 +301,12 @@ jobs:
 
 
       # ============================================================
-      # Find resulting DLL
+      # Verify DLL
       # ============================================================
 
       - name: Verify plugin
         shell: pwsh
         run: |
-          Write-Host "Searching for obs-streamlink.dll..."
-
           $dll = Get-ChildItem `
             "${{ github.workspace }}\build" `
             -Recurse `
@@ -265,8 +318,7 @@ jobs:
             Select-Object -First 1
 
           if (-not $dll) {
-            Write-Host ""
-            Write-Host "Build directory:"
+            Write-Host "Build output:"
             Get-ChildItem `
               "${{ github.workspace }}\build" `
               -Recurse `
@@ -276,8 +328,9 @@ jobs:
           }
 
           Write-Host ""
-          Write-Host "SUCCESS"
-          Write-Host "Plugin:"
+          Write-Host "========================================"
+          Write-Host "BUILD SUCCESSFUL"
+          Write-Host "========================================"
           Write-Host $dll.FullName
 
           "PLUGIN_DLL=$($dll.FullName)" >> $env:GITHUB_ENV
@@ -285,18 +338,22 @@ jobs:
 
       # ============================================================
       # Package
-      #
-      # The ZIP mirrors the OBS installation directory.
       # ============================================================
 
       - name: Package plugin
         shell: pwsh
         run: |
           $stage = "${{ github.workspace }}\package"
+          $zip = "${{ github.workspace }}\obs-streamlink-obs32.2.1-windows-x64.zip"
 
           Remove-Item `
             $stage `
             -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+
+          Remove-Item `
+            $zip `
             -Force `
             -ErrorAction SilentlyContinue
 
@@ -311,12 +368,7 @@ jobs:
             "$stage\obs-plugins\64bit\obs-streamlink.dll" `
             -Force
 
-          # ----------------------------------------------------------
-          # Copy plugin data
-          # ----------------------------------------------------------
-
           if (Test-Path "${{ github.workspace }}\data") {
-
             New-Item `
               -ItemType Directory `
               -Force `
@@ -330,57 +382,32 @@ jobs:
               -Force
           }
 
-          # ----------------------------------------------------------
-          # Installation instructions
-          # ----------------------------------------------------------
-
           @"
           OBS Streamlink
           ==============
 
-          Built for:
-            OBS Studio 32.2.1
-            Windows x64
+          Built for OBS Studio 32.2.1
+          Windows x64
 
-          Installation:
-            1. Completely close OBS Studio.
-            2. Extract this ZIP into your OBS Studio installation
-               directory.
-            3. Allow Windows to replace existing files if prompted.
-            4. Start OBS Studio.
+          Close OBS completely before installing.
 
-          The main plugin file is:
+          Extract the contents of this ZIP into your OBS Studio
+          installation directory.
 
+          Main plugin:
             obs-plugins\64bit\obs-streamlink.dll
 
           "@ | Set-Content "$stage\INSTALL.txt"
-
-          # ----------------------------------------------------------
-          # Create ZIP
-          # ----------------------------------------------------------
-
-          $zip = "${{ github.workspace }}\obs-streamlink-obs32.2.1-windows-x64.zip"
-
-          Remove-Item `
-            $zip `
-            -Force `
-            -ErrorAction SilentlyContinue
 
           7z a `
             -tzip `
             "$zip" `
             "$stage\*"
 
-          if (-not (Test-Path $zip)) {
-            throw "Failed to create package."
-          }
-
           Write-Host ""
-          Write-Host "PACKAGE CREATED:"
+          Write-Host "PACKAGE:"
           Write-Host $zip
 
-          Write-Host ""
-          Write-Host "Package contents:"
           7z l "$zip"
 
 
@@ -398,7 +425,7 @@ jobs:
 
 
       # ============================================================
-      # GitHub Release
+      # GitHub release
       # ============================================================
 
       - name: Create GitHub release
